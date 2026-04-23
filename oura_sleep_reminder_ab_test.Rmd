@@ -1,0 +1,269 @@
+---
+title: "Does a bedtime reminder get Oura users to open the app more?"
+subtitle: "A/B test analysis by Claudia"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+    code_folding: hide
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 8,
+  fig.height = 5,
+  fig.align = "center"
+)
+
+library(tidyverse)
+library(broom)
+library(pwr)
+library(scales)
+library(knitr)
+
+theme_oura <- function() {
+  theme_minimal(base_size = 13, base_family = "sans") +
+    theme(
+      plot.title = element_text(face = "bold", size = 15, color = "#2C2A26"),
+      plot.subtitle = element_text(color = "#6B6659", size = 12),
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(color = "#EDE8DF"),
+      axis.title = element_text(color = "#3D3A33"),
+      legend.position = "top"
+    )
+}
+
+pal_oura <- c(control = "#B8A88A", treatment = "#7A8F6B")
+```
+
+# The bottom line
+
+> **Question:** If we send a nightly bedtime reminder, do users open the Oura app more often?
+>
+> **Answer:** Yes. Users who got the reminder opened the app about 7% more over the following week. The lift is small but consistent, and we have strong evidence it is real rather than random noise.
+>
+> **Recommendation:** Roll out to all users. Before declaring full victory, run a longer holdout to check for notification fatigue.
+
+---
+
+# Why we ran this test
+
+Engagement is one of Oura's most important metrics. The more users open the app, the more they learn about their sleep, and the more likely they are to keep paying for the service. The product team wanted to know whether a simple nightly push notification reminding users to wind down would bring people back into the app.
+
+Before rolling it out to every user, we wanted three things answered:
+
+1. Does the reminder actually change behavior?
+2. If so, how big is the effect? Is it worth the engineering cost and the risk of annoying users with another notification?
+3. Can we trust the result, or could it just be random variation?
+
+# How we set it up
+
+We ran a standard A/B test. Users were randomly split into two groups:
+
+* **Control group (5,000 users):** received no reminder
+* **Treatment group (5,000 users):** received a nightly bedtime reminder
+
+We then counted how many times each user opened the app over the next 7 days. Higher number is better.
+
+Random assignment is the important part. It means the two groups are comparable on everything we can and cannot measure, so any difference in app opens at the end can be attributed to the reminder itself.
+
+## Sample size: why 10,000 users?
+
+Before running the test, we calculated how many users we would need to reliably detect a realistic lift. A smaller test would risk missing a real effect. A larger test wastes traffic that could be spent on the next experiment.
+
+```{r power}
+mu_c     <- 10   # average weekly app opens before the test
+sigma    <- 6    # typical user-to-user variation
+mde_abs  <- 0.5  # smallest lift worth shipping: half a session per week (5%)
+cohens_d <- mde_abs / sigma
+
+pwr_result <- pwr.t.test(
+  d = cohens_d,
+  sig.level = 0.05,
+  power = 0.80,
+  type = "two.sample",
+  alternative = "two.sided"
+)
+
+cat(sprintf(
+  "To detect a 5%% lift reliably, we need about %d users per group.\nWe provisioned 5,000 per group for extra headroom.\n",
+  ceiling(pwr_result$n)
+))
+```
+
+In plain terms: with 5,000 users per group, if a 5% lift really exists, we have an 80% chance of catching it. That is the standard bar for A/B tests in industry.
+
+# The data
+
+```{r load-data}
+users <- read_csv("oura_ab_test_data.csv", show_col_types = FALSE) %>%
+  mutate(arm = factor(arm, levels = c("control", "treatment")))
+
+glimpse(users)
+```
+
+Each row is one user. We have their assigned group (`arm`), the number of times they opened the app in the week before the test (`sessions_pre`), and the number of times they opened it in the test week (`sessions_post`).
+
+```{r sanity, echo=FALSE}
+users %>%
+  group_by(arm) %>%
+  summarise(
+    `Users` = n(),
+    `Avg opens (week before)`  = round(mean(sessions_pre), 2),
+    `Avg opens (test week)`    = round(mean(sessions_post), 2),
+    .groups = "drop"
+  ) %>%
+  kable(caption = "Group comparison. Pre-test averages are nearly identical, which confirms random assignment worked.")
+```
+
+The two groups looked the same in the week before the test. That is our evidence that random assignment gave us a fair comparison. Any difference in the test week is attributable to the reminder.
+
+# What we found
+
+## The headline chart
+
+```{r dist-plot}
+ggplot(users, aes(x = sessions_post, fill = arm, color = arm)) +
+  geom_density(alpha = 0.35, linewidth = 0.8) +
+  scale_fill_manual(values = pal_oura, labels = c("No reminder", "Reminder")) +
+  scale_color_manual(values = pal_oura, labels = c("No reminder", "Reminder")) +
+  labs(
+    title = "How many times users opened the app during the test week",
+    subtitle = "The reminder group (green) is shifted slightly to the right",
+    x = "App opens in the week after enrollment",
+    y = "Share of users",
+    fill = NULL, color = NULL
+  ) +
+  theme_oura()
+```
+
+```{r means-plot}
+users %>%
+  group_by(arm) %>%
+  summarise(
+    mean_sessions = mean(sessions_post),
+    se = sd(sessions_post) / sqrt(n()),
+    .groups = "drop"
+  ) %>%
+  mutate(arm_label = if_else(arm == "control", "No reminder", "Reminder")) %>%
+  ggplot(aes(x = arm_label, y = mean_sessions, color = arm)) +
+  geom_point(size = 5) +
+  geom_errorbar(aes(ymin = mean_sessions - 1.96 * se,
+                    ymax = mean_sessions + 1.96 * se),
+                width = 0.12, linewidth = 0.9) +
+  scale_color_manual(values = pal_oura, guide = "none") +
+  labs(
+    title = "Average app opens per user, test week",
+    subtitle = "Vertical bars show the 95% confidence interval around each group's average",
+    x = NULL,
+    y = "Average app opens"
+  ) +
+  theme_oura()
+```
+
+## The statistical test
+
+We compared the average number of app opens in each group using a standard two-sample test.
+
+```{r ttest, echo=FALSE}
+t_result <- t.test(sessions_post ~ arm, data = users, var.equal = FALSE)
+t_tidy <- tidy(t_result) %>%
+  mutate(
+    lift_abs = estimate2 - estimate1,
+    lift_rel = lift_abs / estimate1
+  )
+
+tibble(
+  Metric = c(
+    "Average opens, no reminder",
+    "Average opens, reminder",
+    "Absolute lift",
+    "Relative lift",
+    "95% confidence interval on the lift",
+    "P-value"
+  ),
+  Value = c(
+    sprintf("%.2f", t_tidy$estimate1),
+    sprintf("%.2f", t_tidy$estimate2),
+    sprintf("%+.2f opens", t_tidy$lift_abs),
+    sprintf("%+.1f%%", t_tidy$lift_rel * 100),
+    sprintf("[%.2f, %.2f]", -t_tidy$conf.high, -t_tidy$conf.low),
+    sprintf("%.4f", t_tidy$p.value)
+  )
+) %>%
+  kable(caption = "Summary of the test result")
+```
+
+### Translating that into plain English
+
+* The reminder group opened the app about 0.7 more times per week than the no-reminder group.
+* That is roughly a 7% relative lift on baseline engagement.
+* The confidence interval tells us the range of effects consistent with the data. The interval does not cross zero, so we are confident the true effect is positive.
+* The p-value is well below the standard 0.05 threshold. In practice, this means that if the reminder actually did nothing, we would almost never see a result this large by chance. The result is unlikely to be a fluke.
+
+# A sanity check: does the result hold up with a more precise method?
+
+The simple comparison above is correct, but we can tighten the estimate by accounting for the fact that some users were heavier app users before the test started. A technique called CUPED uses pre-test behavior to strip out noise, giving a more precise answer with the same data.
+
+```{r cuped, echo=FALSE}
+theta <- cov(users$sessions_post, users$sessions_pre) / var(users$sessions_pre)
+x_bar <- mean(users$sessions_pre)
+
+users <- users %>%
+  mutate(sessions_post_cuped = sessions_post - theta * (sessions_pre - x_bar))
+
+cuped_result <- t.test(sessions_post_cuped ~ arm, data = users)
+
+# Pull standard errors directly from the t-test objects
+t_se     <- as.numeric(diff(t_result$estimate) / t_result$statistic * -1)
+cuped_se <- as.numeric(diff(cuped_result$estimate) / cuped_result$statistic * -1)
+
+cuped_lift <- as.numeric(cuped_result$estimate[2] - cuped_result$estimate[1])
+cuped_p    <- cuped_result$p.value
+
+tibble(
+  Method = c("Simple comparison", "CUPED (precision-adjusted)"),
+  `Lift (opens per user)` = c(
+    sprintf("%+.3f", t_tidy$lift_abs),
+    sprintf("%+.3f", cuped_lift)
+  ),
+  `Uncertainty (std. error)` = c(
+    sprintf("%.3f", abs(t_se)),
+    sprintf("%.3f", abs(cuped_se))
+  ),
+  `P-value` = c(
+    sprintf("%.4f", t_tidy$p.value),
+    sprintf("%.4f", cuped_p)
+  )
+) %>%
+  kable(caption = "Both methods agree on the size of the effect. CUPED is more precise.")
+
+var_reduction <- 1 - (cuped_se^2 / t_se^2)
+cat(sprintf("CUPED cut the uncertainty by about %.0f%%.\n", var_reduction * 100))
+```
+
+Why this matters in practice: the same precision boost means future tests on this metric can run with fewer users, which lets the team ship experiments faster.
+
+# Recommendation
+
+**Ship the reminder.** The evidence is clear. Users exposed to the nightly bedtime reminder opened the app about 7% more often in the following week, and the result is statistically reliable.
+
+Three things to watch before calling it a full win:
+
+1. **Notification fatigue.** A 7-day window is short. Some users may eventually turn off notifications or uninstall. A 30 to 60 day follow-up would confirm the lift is durable.
+2. **Who benefits most.** The average effect hides variation. Heavy users may not need a reminder, while light users might gain the most. A follow-up analysis by user segment would sharpen the rollout plan.
+3. **Does it help sleep.** App opens are a proxy for engagement. The product's actual purpose is better sleep. Before celebrating, confirm the reminder is also improving sleep score or bedtime consistency, not just screen time.
+
+# Appendix: methods in one paragraph
+
+Randomized A/B test with 5,000 users per arm. Primary outcome: app opens in the 7 days following enrollment. Sample size chosen before the test to detect a 5% relative lift with 80% power at a 0.05 significance level. Primary analysis: Welch's two-sample t-test. Secondary analysis: CUPED variance reduction using pre-period app opens as the covariate. Dataset is simulated for portfolio purposes, calibrated to match realistic Oura engagement patterns.
+
+```{r session-info, echo=FALSE}
+sessionInfo()
+```

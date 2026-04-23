@@ -1,0 +1,15 @@
+# R session files
+.Rhistory
+.RData
+.Rproj.user/
+.Ruserdata
+
+# R Markdown cache and intermediate files
+*_cache/
+*_files/
+
+# macOS
+.DS_Store
+
+# RStudio project files (optional to ignore; keeping yours is fine too)
+# *.Rproj
