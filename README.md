@@ -1,6 +1,6 @@
 # Oura Sleep Reminder A/B Test
 
-> **A portfolio analysis testing whether a nightly bedtime reminder increases Oura app engagement.** Built in R, written for a business audience, rigorous enough for a data science interview.
+> **A portfolio analysis testing whether a nightly bedtime reminder increases Oura app engagement.** Built in R, written for a business audience.
 
 ## The question in one line
 
